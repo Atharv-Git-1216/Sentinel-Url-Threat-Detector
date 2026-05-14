@@ -1,30 +1,30 @@
 import re
 from urllib.parse import urlparse
+import joblib
+import pandas as pd
+import os
+
+# Load the AI Brain (ensure it exists)
+MODEL_PATH = 'sentinel_url_model.pkl'
+if os.path.exists(MODEL_PATH):
+    ai_model = joblib.load(MODEL_PATH)
+else:
+    ai_model = None
+    print("⚠️ Warning: ML Model not found. Run train_model.py first.")
 
 def extract_url_features(url):
-    """
-    Dissects the URL into mathematical features.
-    """
     features = {}
-    
-    # Ensure URL has a scheme (http/https) for accurate parsing
     if not url.startswith('http'):
         url = 'http://' + url
         
     parsed_url = urlparse(url)
     domain = parsed_url.netloc
     
-    # 1. Basic Length (Phishing URLs often hide the domain in a long string)
     features['url_length'] = len(url)
-    
-    # 2. Dot Count (Excessive subdomains like 'login.paypal.secure.com')
     features['dot_count'] = domain.count('.')
     
-    # 3. IP Check (Legitimate sites almost never use raw IP addresses)
     ip_pattern = r"(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])"
     features['is_ip'] = 1 if re.search(ip_pattern, domain) else 0
-    
-    # 4. Special Characters (The '@' symbol or excessive hyphens)
     features['has_at_symbol'] = 1 if "@" in url else 0
     features['hyphen_count'] = domain.count('-')
     
@@ -32,68 +32,42 @@ def extract_url_features(url):
 
 def calculate_risk_score(features):
     """
-    The heuristic 'Brain' that evaluates the risk of the features.
+    The ML-Powered Brain.
     """
-    risk_score = 0
     red_flags = []
-
-    # Weighted Logic
-    if features['is_ip'] == 1:
-        risk_score += 50
-        red_flags.append("Uses raw IP address instead of domain")
     
-    if features['has_at_symbol'] == 1:
-        risk_score += 40
-        red_flags.append("Contains '@' symbol (used to spoof destination)")
+    # Still keep our flags for user context
+    if features['is_ip'] == 1: red_flags.append("Uses raw IP address")
+    if features['has_at_symbol'] == 1: red_flags.append("Contains '@' symbol")
+    if features['url_length'] > 75: red_flags.append("Unusually long URL")
 
-    if features['dot_count'] > 3:
-        risk_score += 20
-        red_flags.append("Excessive subdomains detected")
+    if not ai_model:
+        return 0, "UNKNOWN", "Model Missing", red_flags
 
-    if features['url_length'] > 75:
-        risk_score += 15
-        red_flags.append("Unusually long URL (often used to hide malicious paths)")
+    # Convert features to a format the model understands (DataFrame)
+    # The order must match the training data exactly!
+    feature_df = pd.DataFrame([{
+        'url_length': features['url_length'],
+        'dot_count': features['dot_count'],
+        'is_ip': features['is_ip'],
+        'has_at_symbol': features['has_at_symbol'],
+        'hyphen_count': features['hyphen_count']
+    }])
 
-    if features['hyphen_count'] > 1:
-        risk_score += 10
-        red_flags.append("Multiple hyphens in domain (common in brand impersonation)")
-
-    # Normalize score to 100%
-    final_score = min(risk_score, 100)
+    # Ask the AI for a prediction (0 = Safe, 1 = Malicious)
+    prediction = ai_model.predict(feature_df)[0]
     
-    # Categorization
-    if final_score >= 50:
+    # Ask the AI how confident it is (Probability)
+    probabilities = ai_model.predict_proba(feature_df)[0]
+    confidence_score = round(probabilities[prediction] * 100, 2)
+
+    if prediction == 1:
         severity = "HIGH"
-        verdict = "Malicious"
-    elif final_score >= 20:
-        severity = "MEDIUM"
-        verdict = "Suspicious"
+        verdict = f"Malicious (AI Confidence: {confidence_score}%)"
+        risk_score = int(confidence_score) # Use confidence as the risk score
     else:
         severity = "LOW"
-        verdict = "Safe"
+        verdict = f"Safe (AI Confidence: {confidence_score}%)"
+        risk_score = int(100 - confidence_score)
 
-    return final_score, severity, verdict, red_flags
-
-# --- Test Interface ---
-if __name__ == "__main__":
-    print("🌐 Sentinel Phase 2: URL Threat Detector")
-    print("-----------------------------------------")
-    target = input("Enter URL to scan: ").strip()
-    
-    if target:
-        feats, cleaned_url = extract_url_features(target)
-        score, sev, verdict, flags = calculate_risk_score(feats)
-        
-        print(f"\n[+] Analyzing: {cleaned_url}")
-        print(f"[+] Risk Score: {score}/100")
-        print(f"[+] Severity: {sev}")
-        print(f"[+] Verdict: {verdict}")
-        
-        if flags:
-            print("\n🚨 DETECTED RED FLAGS:")
-            for flag in flags:
-                print(f" - {flag}")
-        else:
-            print("\n✅ No obvious structural threats detected.")
-    else:
-        print("Error: No URL provided.")
+    return risk_score, severity, verdict, red_flags
