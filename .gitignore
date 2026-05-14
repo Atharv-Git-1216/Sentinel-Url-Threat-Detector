@@ -1,0 +1,14 @@
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+
+# Environment Variables (Never upload secrets!)
+.env
+
+# Machine Learning Models
+*.pkl
